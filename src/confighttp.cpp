@@ -780,6 +780,23 @@ namespace confighttp {
       bad_request(response, request, "Failed to evaluate ViGEm health");
     }
   }
+
+  /**
+   * @brief Health check for the HIDMaestro sidecar bundle on Windows.
+   * @api_examples{/api/health/hidmaestro| GET| {"available":true}}
+   */
+  void getHidmaestroHealth(resp_https_t response, req_https_t request) {
+    if (!authenticate(response, request)) {
+      return;
+    }
+    try {
+      nlohmann::json out;
+      out["available"] = platf::is_hidmaestro_available();
+      send_response(response, out);
+    } catch (...) {
+      bad_request(response, request, "Failed to evaluate HIDMaestro health");
+    }
+  }
 #endif
 
   /**
@@ -3872,6 +3889,7 @@ namespace confighttp {
 #ifdef _WIN32
     register_api_route("^/api/framegen/edid-refresh$", "GET", getFramegenEdidRefresh);
     register_api_route("^/api/health/vigem$", "GET", getVigemHealth);
+    register_api_route("^/api/health/hidmaestro$", "GET", getHidmaestroHealth);
     register_api_route("^/api/health/crashdump$", "GET", getCrashDumpStatus);
     register_api_route("^/api/health/crashdump/dismiss$", "POST", postCrashDumpDismiss);
 #endif
