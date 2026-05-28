@@ -17,6 +17,7 @@
 
 // local includes
 #include "gamepad_backend.h"
+#include "hidmaestro_backend.h"
 #include "keylayout.h"
 #include "misc.h"
 #include "src/config.h"
@@ -544,9 +545,29 @@ namespace platf {
     input_t result {new input_raw_t {}};
     auto &raw = *(input_raw_t *) result.get();
 
-    auto vigem = std::make_unique<vigem_t>();
-    if (!vigem->init()) {
-      raw.backend = std::move(vigem);
+    // Backend selection. `auto` prefers HIDMaestro (modern, user-mode UMDF2)
+    // when available and falls back to ViGEm. Explicit selections honor the
+    // user's choice and disable gamepad emulation if the chosen backend is
+    // unavailable rather than silently switching.
+    auto choice = config::input.gamepad_backend;
+    if (choice.empty()) {
+      choice = "auto";
+    }
+
+    if (choice == "hidmaestro"sv || choice == "auto"sv) {
+      auto hm = std::make_unique<hidmaestro_t>();
+      if (!hm->init()) {
+        raw.backend = std::move(hm);
+      } else if (choice == "hidmaestro"sv) {
+        BOOST_LOG(warning) << "HIDMaestro backend selected but unavailable; gamepad emulation disabled"sv;
+      }
+    }
+
+    if (!raw.backend && (choice == "vigem"sv || choice == "auto"sv)) {
+      auto vigem = std::make_unique<vigem_t>();
+      if (!vigem->init()) {
+        raw.backend = std::move(vigem);
+      }
     }
 
     // Get pointers to virtual touch/pen input functions (Win10 1809+)

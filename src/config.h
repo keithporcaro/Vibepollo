@@ -236,6 +236,11 @@ namespace config {
     std::chrono::duration<double> key_repeat_period;
 
     std::string gamepad;
+    // Windows-only: backend that owns virtual gamepad emulation. One of
+    // "auto", "hidmaestro", "vigem". `auto` prefers HIDMaestro when the
+    // sidecar is bundled and the driver is available, otherwise falls back
+    // to ViGEmBus. Ignored on Linux / macOS.
+    std::string gamepad_backend;
     bool ds4_back_as_touchpad_click;
     bool motion_as_ds4;
     bool touchpad_as_ds4;

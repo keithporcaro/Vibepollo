@@ -272,6 +272,17 @@ namespace platf {
     return true;
   }
 
+  bool is_hidmaestro_available() {
+    WCHAR exe_path[MAX_PATH] = {0};
+    DWORD n = GetModuleFileNameW(nullptr, exe_path, _countof(exe_path));
+    if (n == 0 || n >= _countof(exe_path)) {
+      return false;
+    }
+    std::filesystem::path sidecar = std::filesystem::path {exe_path}.parent_path() / L"tools" / L"vibepollo_hidmaestro_host.exe";
+    std::error_code ec;
+    return std::filesystem::exists(sidecar, ec);
+  }
+
   HDESK syncThreadDesktop() {
     auto hDesk = OpenInputDesktop(DF_ALLOWOTHERACCOUNTHOOK, FALSE, GENERIC_ALL);
     if (!hDesk) {

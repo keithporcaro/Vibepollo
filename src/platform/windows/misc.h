@@ -143,6 +143,16 @@ namespace platf {
    */
   bool is_vigem_installed(std::string *version_out = nullptr);
 
+  /**
+   * @brief Check if the HIDMaestro sidecar is bundled alongside sunshine.exe.
+   * @details Probes for `tools/vibepollo_hidmaestro_host.exe` next to the running
+   *          executable. Driver-state probing (UMDF2 device class lookup) will be
+   *          added once the sidecar is implemented; the sidecar performs its own
+   *          driver-install handshake on first run.
+   * @return true if the sidecar binary is present, false otherwise.
+   */
+  bool is_hidmaestro_available();
+
   struct gpu_info_t {
     std::string description;
     std::uint32_t vendor_id = 0;
