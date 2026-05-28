@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <RootNamespace>VibePollo.HidMaestroHost</RootNamespace>
+    <AssemblyName>vibepollo_hidmaestro_host</AssemblyName>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <!-- Single-file self-contained publish so the sidecar ships as one exe -->
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>true</SelfContained>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <!--
+    HIDMaestro.Core is not published to NuGet. Drop HIDMaestro.Core.dll into
+    ./external/ before building (the CMake integration will fetch it from the
+    GitHub release once the host-side wiring lands). The reference is wired
+    here so the build fails loudly if the dependency isn't staged.
+  -->
+  <ItemGroup Condition="Exists('external\HIDMaestro.Core.dll')">
+    <Reference Include="HIDMaestro.Core">
+      <HintPath>external\HIDMaestro.Core.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,4 @@
+# Drop HIDMaestro.Core.dll here before building.
+# The CMake integration will eventually fetch this from the HIDMaestro
+# GitHub release as a build step. Until then, download it manually from
+# https://github.com/hifihedgehog/HIDMaestro/releases.

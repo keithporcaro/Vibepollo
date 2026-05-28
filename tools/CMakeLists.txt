@@ -116,3 +116,47 @@ target_link_libraries(sunshine_display_helper
         taskschd
         ${PLATFORM_LIBRARIES})
 target_compile_options(sunshine_display_helper PRIVATE ${SUNSHINE_COMPILE_OPTIONS})
+
+# ---------------------------------------------------------------------------
+# HIDMaestro sidecar (.NET 10, C#).
+# Built via `dotnet publish` into a self-contained single-file exe and staged
+# alongside sunshine.exe under tools/. Skipped with a warning if the .NET 10
+# SDK isn't available on this build machine; the host falls back to ViGEm in
+# that case at runtime via the `gamepad_backend = auto` selector.
+# ---------------------------------------------------------------------------
+find_program(DOTNET_EXECUTABLE NAMES dotnet)
+if (DOTNET_EXECUTABLE)
+    set(HIDMAESTRO_HOST_SRC_DIR "${CMAKE_SOURCE_DIR}/tools/hidmaestro_host")
+    set(HIDMAESTRO_HOST_PUBLISH_DIR "${CMAKE_BINARY_DIR}/hidmaestro_host_publish")
+    set(HIDMAESTRO_HOST_EXE "${HIDMAESTRO_HOST_PUBLISH_DIR}/vibepollo_hidmaestro_host.exe")
+
+    file(GLOB_RECURSE HIDMAESTRO_HOST_SOURCES CONFIGURE_DEPENDS
+            "${HIDMAESTRO_HOST_SRC_DIR}/*.cs"
+            "${HIDMAESTRO_HOST_SRC_DIR}/*.csproj")
+
+    add_custom_command(
+            OUTPUT "${HIDMAESTRO_HOST_EXE}"
+            COMMAND "${DOTNET_EXECUTABLE}" publish
+                    "${HIDMAESTRO_HOST_SRC_DIR}/hidmaestro_host.csproj"
+                    -c Release
+                    -o "${HIDMAESTRO_HOST_PUBLISH_DIR}"
+                    --nologo
+            DEPENDS ${HIDMAESTRO_HOST_SOURCES}
+            COMMENT "Publishing HIDMaestro sidecar (dotnet publish)")
+
+    add_custom_target(hidmaestro_host ALL DEPENDS "${HIDMAESTRO_HOST_EXE}")
+
+    # Mirror the display-helper staging pattern: copy into wix_payload/tools
+    # so the WiX installer picks it up, and (later) next to sunshine.exe so
+    # the build tree is runnable.
+    add_custom_command(TARGET hidmaestro_host POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/wix_payload/tools"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${HIDMAESTRO_HOST_EXE}"
+                    "${CMAKE_BINARY_DIR}/wix_payload/tools/vibepollo_hidmaestro_host.exe"
+            COMMENT "Staging hidmaestro sidecar into wix_payload/tools")
+else()
+    message(WARNING
+            "dotnet executable not found; the HIDMaestro sidecar will not be built. "
+            "Install the .NET 10 SDK to enable the HIDMaestro gamepad backend.")
+endif()

@@ -49,6 +49,19 @@ if (TARGET sunshine_display_helper)
         COMMENT "Copying sunshine_display_helper into tools directory")
 endif()
 
+# Stage the HIDMaestro sidecar next to sunshine.exe so the host can find it via
+# `is_hidmaestro_available()`. The dotnet publish step lives in tools/CMakeLists.txt.
+if (TARGET hidmaestro_host)
+    add_dependencies(sunshine hidmaestro_host)
+
+    add_custom_command(TARGET sunshine POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:sunshine>/tools"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${CMAKE_BINARY_DIR}/hidmaestro_host_publish/vibepollo_hidmaestro_host.exe"
+                "$<TARGET_FILE_DIR:sunshine>/tools"
+        COMMENT "Copying hidmaestro_host sidecar into tools directory")
+endif()
+
 # Enable libdisplaydevice logging in the main Sunshine binary only
 target_compile_definitions(sunshine PRIVATE SUNSHINE_USE_DISPLAYDEVICE_LOGGING)
 
