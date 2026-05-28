@@ -1777,6 +1777,20 @@ namespace platf {
     ds4_update_ts_and_send(vigem, battery.id.globalIndex);
   }
 
+  // Steam Controller extended state (paddles, capacitive touch/grip). The HIDMaestro
+  // Steam Controller emulator (host-side peer plan) consumes this; until then it is a
+  // no-op so SC-aware clients still degrade to XInput emulation via gamepad_update().
+  void gamepad_update_ex(input_t &input, const gamepad_sc_extended_t &state) {
+    BOOST_LOG(verbose) << "gamepad_update_ex: controller ["sv << (int) state.id.clientRelativeIndex
+                       << "] scExtButtonFlags ["sv << util::hex(state.scExtButtonFlags).to_string_view() << ']';
+  }
+
+  // Steam Controller trackpad event. Consumed by the HIDMaestro emulator; no-op until then.
+  void gamepad_trackpad(input_t &input, const gamepad_sc_trackpad_t &touch) {
+    BOOST_LOG(verbose) << "gamepad_trackpad: controller ["sv << (int) touch.id.clientRelativeIndex
+                       << "] pad ["sv << (int) touch.padIndex << ']';
+  }
+
   void freeInput(void *p) {
     auto input = (input_raw_t *) p;
 

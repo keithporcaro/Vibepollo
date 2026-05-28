@@ -522,6 +522,24 @@ const KeyCodeMap kKeyCodesMap[] = {
     // Unimplemented
   }
 
+  /**
+   * @brief Sends Steam Controller extended state to the OS.
+   * @param input The global input context.
+   * @param state The extended state event.
+   */
+  void gamepad_update_ex(input_t &input, const gamepad_sc_extended_t &state) {
+    // Unimplemented - consumed by the HIDMaestro Steam Controller emulator (host-side peer plan)
+  }
+
+  /**
+   * @brief Sends a Steam Controller trackpad event to the OS.
+   * @param input The global input context.
+   * @param touch The trackpad event.
+   */
+  void gamepad_trackpad(input_t &input, const gamepad_sc_trackpad_t &touch) {
+    // Unimplemented - consumed by the HIDMaestro Steam Controller emulator (host-side peer plan)
+  }
+
   input_t input() {
     input_t result {new macos_input_t()};
 

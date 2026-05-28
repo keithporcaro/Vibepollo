@@ -255,6 +255,7 @@ namespace platf {
 
     constexpr caps_t pen_touch = 0x01;  // Pen and touch events
     constexpr caps_t controller_touch = 0x02;  // Controller touch events
+    constexpr caps_t steam_controller = 0x04;  // Steam Controller extended state / trackpad events (LI_FF_STEAM_CONTROLLER)
   };  // namespace platform_caps
 
   struct gamepad_state_t {
@@ -308,6 +309,28 @@ namespace platf {
     gamepad_id_t id;
     std::uint8_t state;
     std::uint8_t percentage;
+  };
+
+  // Steam Controller extended state: paddles, capacitive touch/grip. Carried by the
+  // SS_CONTROLLER_SC_EXTENDED packet alongside the regular gamepad_state_t.
+  struct gamepad_sc_extended_t {
+    gamepad_id_t id;
+    std::uint8_t extensionVersion;
+    std::uint16_t scExtButtonFlags;  // SCEX_* bits from Limelight.h
+    std::uint16_t gripCapLeft;
+    std::uint16_t gripCapRight;
+    std::uint8_t flags;
+  };
+
+  // Steam Controller per-trackpad event. Distinct from gamepad_touch_t (DS4 touchpad).
+  struct gamepad_sc_trackpad_t {
+    gamepad_id_t id;
+    std::uint8_t padIndex;  // SC_TRACKPAD_LEFT / SC_TRACKPAD_RIGHT
+    std::uint8_t eventType;  // LI_TOUCH_EVENT_*
+    std::uint8_t pressedFlags;  // SCTP_FLAG_CLICK | SCTP_FLAG_CAP_TOUCH
+    float x;
+    float y;
+    float pressure;
   };
 
   struct touch_input_t {
@@ -799,6 +822,20 @@ namespace platf {
    * @param battery The battery event.
    */
   void gamepad_battery(input_t &input, const gamepad_battery_t &battery);
+
+  /**
+   * @brief Send Steam Controller extended state (paddles, capacitive touch/grip) to the OS.
+   * @param input The global input context.
+   * @param state The extended state event.
+   */
+  void gamepad_update_ex(input_t &input, const gamepad_sc_extended_t &state);
+
+  /**
+   * @brief Send a Steam Controller trackpad event to the OS.
+   * @param input The global input context.
+   * @param touch The trackpad event.
+   */
+  void gamepad_trackpad(input_t &input, const gamepad_sc_trackpad_t &touch);
 
   /**
    * @brief Create a new virtual gamepad.
