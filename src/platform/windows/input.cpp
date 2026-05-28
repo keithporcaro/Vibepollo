@@ -16,6 +16,7 @@
 #include <ViGEm/Client.h>
 
 // local includes
+#include "gamepad_backend.h"
 #include "keylayout.h"
 #include "misc.h"
 #include "src/config.h"
@@ -216,9 +217,9 @@ namespace platf {
     }
   }
 
-  class vigem_t {
+  class vigem_t: public gamepad_backend_t {
   public:
-    int init() {
+    int init() override {
       // Probe ViGEm during startup to see if we can successfully attach gamepads. The web UI exposes a
       // dedicated health endpoint and warning banner when ViGEm is missing, so avoid fatal logs here.
       client_t client {vigem_alloc()};
@@ -234,6 +235,70 @@ namespace platf {
 
       return 0;
     }
+
+    /**
+     * @brief Attaches a new gamepad, selecting Xbox 360 or DualShock 4 based on
+     *        config and client metadata.
+     * @param id The gamepad ID.
+     * @param metadata The client-reported controller metadata.
+     * @param feedback_queue The queue for posting messages back to the client.
+     * @return 0 on success, -1 on failure.
+     */
+    int alloc(const gamepad_id_t &id, const gamepad_arrival_t &metadata, feedback_queue_t feedback_queue) override {
+      VIGEM_TARGET_TYPE selectedGamepadType;
+
+      if (config::input.gamepad == "x360"sv) {
+        BOOST_LOG(info) << "Gamepad " << id.globalIndex << " will be Xbox 360 controller (manual selection)"sv;
+        selectedGamepadType = Xbox360Wired;
+      } else if (config::input.gamepad == "ds4"sv) {
+        BOOST_LOG(info) << "Gamepad " << id.globalIndex << " will be DualShock 4 controller (manual selection)"sv;
+        selectedGamepadType = DualShock4Wired;
+      } else if (metadata.type == LI_CTYPE_PS) {
+        BOOST_LOG(info) << "Gamepad " << id.globalIndex << " will be DualShock 4 controller (auto-selected by client-reported type)"sv;
+        selectedGamepadType = DualShock4Wired;
+      } else if (metadata.type == LI_CTYPE_XBOX) {
+        BOOST_LOG(info) << "Gamepad " << id.globalIndex << " will be Xbox 360 controller (auto-selected by client-reported type)"sv;
+        selectedGamepadType = Xbox360Wired;
+      } else if (config::input.motion_as_ds4 && (metadata.capabilities & (LI_CCAP_ACCEL | LI_CCAP_GYRO))) {
+        BOOST_LOG(info) << "Gamepad " << id.globalIndex << " will be DualShock 4 controller (auto-selected by motion sensor presence)"sv;
+        selectedGamepadType = DualShock4Wired;
+      } else if (config::input.touchpad_as_ds4 && (metadata.capabilities & LI_CCAP_TOUCHPAD)) {
+        BOOST_LOG(info) << "Gamepad " << id.globalIndex << " will be DualShock 4 controller (auto-selected by touchpad presence)"sv;
+        selectedGamepadType = DualShock4Wired;
+      } else {
+        BOOST_LOG(info) << "Gamepad " << id.globalIndex << " will be Xbox 360 controller (default)"sv;
+        selectedGamepadType = Xbox360Wired;
+      }
+
+      if (selectedGamepadType == Xbox360Wired) {
+        if (metadata.capabilities & (LI_CCAP_ACCEL | LI_CCAP_GYRO)) {
+          BOOST_LOG(warning) << "Gamepad " << id.globalIndex << " has motion sensors, but they are not usable when emulating an Xbox 360 controller"sv;
+        }
+        if (metadata.capabilities & LI_CCAP_TOUCHPAD) {
+          BOOST_LOG(warning) << "Gamepad " << id.globalIndex << " has a touchpad, but it is not usable when emulating an Xbox 360 controller"sv;
+        }
+        if (metadata.capabilities & LI_CCAP_RGB_LED) {
+          BOOST_LOG(warning) << "Gamepad " << id.globalIndex << " has an RGB LED, but it is not usable when emulating an Xbox 360 controller"sv;
+        }
+      } else if (selectedGamepadType == DualShock4Wired) {
+        if (!(metadata.capabilities & (LI_CCAP_ACCEL | LI_CCAP_GYRO))) {
+          BOOST_LOG(warning) << "Gamepad " << id.globalIndex << " is emulating a DualShock 4 controller, but the client gamepad doesn't have motion sensors active"sv;
+        }
+        if (!(metadata.capabilities & LI_CCAP_TOUCHPAD)) {
+          BOOST_LOG(warning) << "Gamepad " << id.globalIndex << " is emulating a DualShock 4 controller, but the client gamepad doesn't have a touchpad"sv;
+        }
+      }
+
+      return alloc_gamepad_internal(id, feedback_queue, selectedGamepadType);
+    }
+
+    // Backend interface overrides — bodies live further down in this file, after the
+    // ViGEm-specific report helpers (x360_update_state, ds4_update_state, etc.) that
+    // they call into.
+    void update(int nr, const gamepad_state_t &state) override;
+    void touch(const gamepad_touch_t &touch) override;
+    void motion(const gamepad_motion_t &motion) override;
+    void battery(const gamepad_battery_t &battery) override;
 
     /**
      * @brief Attaches a new gamepad.
@@ -313,7 +378,7 @@ namespace platf {
      * @brief Detaches the specified gamepad
      * @param nr The gamepad.
      */
-    void free_target(int nr) {
+    void free_pad(int nr) override {
       auto &gamepad = gamepads[nr];
 
       if (gamepad.repeat_task) {
@@ -466,11 +531,9 @@ namespace platf {
   }
 
   struct input_raw_t {
-    ~input_raw_t() {
-      delete vigem;
-    }
+    ~input_raw_t() = default;
 
-    vigem_t *vigem;
+    std::unique_ptr<gamepad_backend_t> backend;
 
     decltype(CreateSyntheticPointerDevice) *fnCreateSyntheticPointerDevice;
     decltype(InjectSyntheticPointerInput) *fnInjectSyntheticPointerInput;
@@ -481,10 +544,9 @@ namespace platf {
     input_t result {new input_raw_t {}};
     auto &raw = *(input_raw_t *) result.get();
 
-    raw.vigem = new vigem_t {};
-    if (raw.vigem->init()) {
-      delete raw.vigem;
-      raw.vigem = nullptr;
+    auto vigem = std::make_unique<vigem_t>();
+    if (!vigem->init()) {
+      raw.backend = std::move(vigem);
     }
 
     // Get pointers to virtual touch/pen input functions (Win10 1809+)
@@ -1199,66 +1261,18 @@ namespace platf {
 
   int alloc_gamepad(input_t &input, const gamepad_id_t &id, const gamepad_arrival_t &metadata, feedback_queue_t feedback_queue) {
     auto raw = (input_raw_t *) input.get();
-
-    if (!raw->vigem) {
+    if (!raw->backend) {
       return 0;
     }
-
-    VIGEM_TARGET_TYPE selectedGamepadType;
-
-    if (config::input.gamepad == "x360"sv) {
-      BOOST_LOG(info) << "Gamepad " << id.globalIndex << " will be Xbox 360 controller (manual selection)"sv;
-      selectedGamepadType = Xbox360Wired;
-    } else if (config::input.gamepad == "ds4"sv) {
-      BOOST_LOG(info) << "Gamepad " << id.globalIndex << " will be DualShock 4 controller (manual selection)"sv;
-      selectedGamepadType = DualShock4Wired;
-    } else if (metadata.type == LI_CTYPE_PS) {
-      BOOST_LOG(info) << "Gamepad " << id.globalIndex << " will be DualShock 4 controller (auto-selected by client-reported type)"sv;
-      selectedGamepadType = DualShock4Wired;
-    } else if (metadata.type == LI_CTYPE_XBOX) {
-      BOOST_LOG(info) << "Gamepad " << id.globalIndex << " will be Xbox 360 controller (auto-selected by client-reported type)"sv;
-      selectedGamepadType = Xbox360Wired;
-    } else if (config::input.motion_as_ds4 && (metadata.capabilities & (LI_CCAP_ACCEL | LI_CCAP_GYRO))) {
-      BOOST_LOG(info) << "Gamepad " << id.globalIndex << " will be DualShock 4 controller (auto-selected by motion sensor presence)"sv;
-      selectedGamepadType = DualShock4Wired;
-    } else if (config::input.touchpad_as_ds4 && (metadata.capabilities & LI_CCAP_TOUCHPAD)) {
-      BOOST_LOG(info) << "Gamepad " << id.globalIndex << " will be DualShock 4 controller (auto-selected by touchpad presence)"sv;
-      selectedGamepadType = DualShock4Wired;
-    } else {
-      BOOST_LOG(info) << "Gamepad " << id.globalIndex << " will be Xbox 360 controller (default)"sv;
-      selectedGamepadType = Xbox360Wired;
-    }
-
-    if (selectedGamepadType == Xbox360Wired) {
-      if (metadata.capabilities & (LI_CCAP_ACCEL | LI_CCAP_GYRO)) {
-        BOOST_LOG(warning) << "Gamepad " << id.globalIndex << " has motion sensors, but they are not usable when emulating an Xbox 360 controller"sv;
-      }
-      if (metadata.capabilities & LI_CCAP_TOUCHPAD) {
-        BOOST_LOG(warning) << "Gamepad " << id.globalIndex << " has a touchpad, but it is not usable when emulating an Xbox 360 controller"sv;
-      }
-      if (metadata.capabilities & LI_CCAP_RGB_LED) {
-        BOOST_LOG(warning) << "Gamepad " << id.globalIndex << " has an RGB LED, but it is not usable when emulating an Xbox 360 controller"sv;
-      }
-    } else if (selectedGamepadType == DualShock4Wired) {
-      if (!(metadata.capabilities & (LI_CCAP_ACCEL | LI_CCAP_GYRO))) {
-        BOOST_LOG(warning) << "Gamepad " << id.globalIndex << " is emulating a DualShock 4 controller, but the client gamepad doesn't have motion sensors active"sv;
-      }
-      if (!(metadata.capabilities & LI_CCAP_TOUCHPAD)) {
-        BOOST_LOG(warning) << "Gamepad " << id.globalIndex << " is emulating a DualShock 4 controller, but the client gamepad doesn't have a touchpad"sv;
-      }
-    }
-
-    return raw->vigem->alloc_gamepad_internal(id, feedback_queue, selectedGamepadType);
+    return raw->backend->alloc(id, metadata, std::move(feedback_queue));
   }
 
   void free_gamepad(input_t &input, int nr) {
     auto raw = (input_raw_t *) input.get();
-
-    if (!raw->vigem) {
+    if (!raw->backend) {
       return;
     }
-
-    raw->vigem->free_target(nr);
+    raw->backend->free_pad(nr);
   }
 
   /**
@@ -1532,20 +1546,10 @@ namespace platf {
   }
 
   /**
-   * @brief Updates virtual gamepad with the provided gamepad state.
-   * @param input The input context.
-   * @param nr The gamepad index to update.
-   * @param gamepad_state The gamepad button/axis state sent from the client.
+   * @brief Sends the gamepad state to the virtual ViGEm device.
    */
-  void gamepad_update(input_t &input, int nr, const gamepad_state_t &gamepad_state) {
-    auto vigem = ((input_raw_t *) input.get())->vigem;
-
-    // If there is no gamepad support
-    if (!vigem) {
-      return;
-    }
-
-    auto &gamepad = vigem->gamepads[nr];
+  void vigem_t::update(int nr, const gamepad_state_t &gamepad_state) {
+    auto &gamepad = gamepads[nr];
     if (!gamepad.gp) {
       return;
     }
@@ -1554,30 +1558,29 @@ namespace platf {
 
     if (vigem_target_get_type(gamepad.gp.get()) == Xbox360Wired) {
       x360_update_state(gamepad, gamepad_state);
-      status = vigem_target_x360_update(vigem->client.get(), gamepad.gp.get(), gamepad.report.x360);
+      status = vigem_target_x360_update(client.get(), gamepad.gp.get(), gamepad.report.x360);
       if (!VIGEM_SUCCESS(status)) {
         BOOST_LOG(warning) << "Couldn't send gamepad input to ViGEm ["sv << util::hex(status).to_string_view() << ']';
       }
     } else {
       ds4_update_state(gamepad, gamepad_state);
-      ds4_update_ts_and_send(vigem, nr);
+      ds4_update_ts_and_send(this, nr);
     }
   }
 
-  /**
-   * @brief Sends a gamepad touch event to the OS.
-   * @param input The global input context.
-   * @param touch The touch event.
-   */
-  void gamepad_touch(input_t &input, const gamepad_touch_t &touch) {
-    auto vigem = ((input_raw_t *) input.get())->vigem;
-
-    // If there is no gamepad support
-    if (!vigem) {
+  void gamepad_update(input_t &input, int nr, const gamepad_state_t &gamepad_state) {
+    auto raw = (input_raw_t *) input.get();
+    if (!raw->backend) {
       return;
     }
+    raw->backend->update(nr, gamepad_state);
+  }
 
-    auto &gamepad = vigem->gamepads[touch.id.globalIndex];
+  /**
+   * @brief Maps a gamepad touch event onto the DS4 touchpad report.
+   */
+  void vigem_t::touch(const gamepad_touch_t &touch) {
+    auto &gamepad = gamepads[touch.id.globalIndex];
     if (!gamepad.gp) {
       return;
     }
@@ -1667,23 +1670,22 @@ namespace platf {
       }
     }
 
-    ds4_update_ts_and_send(vigem, touch.id.globalIndex);
+    ds4_update_ts_and_send(this, touch.id.globalIndex);
+  }
+
+  void gamepad_touch(input_t &input, const gamepad_touch_t &touch) {
+    auto raw = (input_raw_t *) input.get();
+    if (!raw->backend) {
+      return;
+    }
+    raw->backend->touch(touch);
   }
 
   /**
-   * @brief Sends a gamepad motion event to the OS.
-   * @param input The global input context.
-   * @param motion The motion event.
+   * @brief Maps a gamepad motion event onto the DS4 IMU report.
    */
-  void gamepad_motion(input_t &input, const gamepad_motion_t &motion) {
-    auto vigem = ((input_raw_t *) input.get())->vigem;
-
-    // If there is no gamepad support
-    if (!vigem) {
-      return;
-    }
-
-    auto &gamepad = vigem->gamepads[motion.id.globalIndex];
+  void vigem_t::motion(const gamepad_motion_t &motion) {
+    auto &gamepad = gamepads[motion.id.globalIndex];
     if (!gamepad.gp) {
       return;
     }
@@ -1701,23 +1703,25 @@ namespace platf {
     }
 
     ds4_update_motion(gamepad, motion.motionType, motion.x, motion.y, motion.z);
-    ds4_update_ts_and_send(vigem, motion.id.globalIndex);
+    ds4_update_ts_and_send(this, motion.id.globalIndex);
+  }
+
+  void gamepad_motion(input_t &input, const gamepad_motion_t &motion) {
+    auto raw = (input_raw_t *) input.get();
+    if (!raw->backend) {
+      return;
+    }
+    raw->backend->motion(motion);
   }
 
   /**
-   * @brief Sends a gamepad battery event to the OS.
-   * @param input The global input context.
-   * @param battery The battery event.
+   * @brief Maps a gamepad battery event onto the DS4 battery fields.
+   *
+   * For the report format of the battery level fields, see:
+   * https://github.com/torvalds/linux/blob/946c6b59c56dc6e7d8364a8959cb36bf6d10bc37/drivers/hid/hid-playstation.c#L2305-L2314
    */
-  void gamepad_battery(input_t &input, const gamepad_battery_t &battery) {
-    auto vigem = ((input_raw_t *) input.get())->vigem;
-
-    // If there is no gamepad support
-    if (!vigem) {
-      return;
-    }
-
-    auto &gamepad = vigem->gamepads[battery.id.globalIndex];
+  void vigem_t::battery(const gamepad_battery_t &battery) {
+    auto &gamepad = gamepads[battery.id.globalIndex];
     if (!gamepad.gp) {
       return;
     }
@@ -1726,9 +1730,6 @@ namespace platf {
     if (vigem_target_get_type(gamepad.gp.get()) != DualShock4Wired) {
       return;
     }
-
-    // For details on the report format of these battery level fields, see:
-    // https://github.com/torvalds/linux/blob/946c6b59c56dc6e7d8364a8959cb36bf6d10bc37/drivers/hid/hid-playstation.c#L2305-L2314
 
     auto &report = gamepad.report.ds4.Report;
 
@@ -1774,7 +1775,15 @@ namespace platf {
       }
     }
 
-    ds4_update_ts_and_send(vigem, battery.id.globalIndex);
+    ds4_update_ts_and_send(this, battery.id.globalIndex);
+  }
+
+  void gamepad_battery(input_t &input, const gamepad_battery_t &battery) {
+    auto raw = (input_raw_t *) input.get();
+    if (!raw->backend) {
+      return;
+    }
+    raw->backend->battery(battery);
   }
 
   void freeInput(void *p) {
@@ -1794,8 +1803,8 @@ namespace platf {
       return gps;
     }
 
-    auto vigem = ((input_raw_t *) input)->vigem;
-    auto enabled = vigem != nullptr;
+    auto raw = (input_raw_t *) input;
+    auto enabled = raw->backend != nullptr;
     auto reason = enabled ? "" : "gamepads.vigem-not-available";
 
     // ds4 == ps4
