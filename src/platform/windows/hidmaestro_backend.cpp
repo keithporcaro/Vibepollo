@@ -84,6 +84,18 @@ namespace platf {
     ProcessHandler proc {true};  // job-killed child
     std::unique_ptr<dxgi::INamedPipe> pipe;  // FramedPipe(WinPipe) used synchronously before async starts
     std::unique_ptr<dxgi::AsyncNamedPipe> async_pipe;
+    // FramedPipe::send writes a length prefix then the payload. Concurrent
+    // callers from Vibepollo's input dispatcher could interleave headers
+    // with bodies; serialize all outbound sends through one mutex.
+    std::mutex send_mutex;
+
+    void send_locked(std::vector<std::uint8_t> bytes) {
+      if (!async_pipe) {
+        return;
+      }
+      std::lock_guard lock(send_mutex);
+      async_pipe->send(bytes);
+    }
 
     struct pad_state_t {
       feedback_queue_t feedback_queue;
@@ -302,7 +314,7 @@ namespace platf {
       .capabilities = metadata.capabilities,
       .supported_buttons = metadata.supportedButtons,
     };
-    _impl->async_pipe->send(hidmaestro::encode_alloc(a));
+    _impl->send_locked(hidmaestro::encode_alloc(a));
     return 0;
   }
 
@@ -314,14 +326,14 @@ namespace platf {
       std::lock_guard lock(_impl->pads_mutex);
       _impl->pads.erase(nr);
     }
-    _impl->async_pipe->send(hidmaestro::encode_free({static_cast<std::uint16_t>(nr)}));
+    _impl->send_locked(hidmaestro::encode_free({static_cast<std::uint16_t>(nr)}));
   }
 
   void hidmaestro_t::update(int nr, const gamepad_state_t &state) {
     if (!_impl->async_pipe) {
       return;
     }
-    _impl->async_pipe->send(hidmaestro::encode_state({static_cast<std::uint16_t>(nr), state}));
+    _impl->send_locked(hidmaestro::encode_state({static_cast<std::uint16_t>(nr), state}));
   }
 
   void hidmaestro_t::touch(const gamepad_touch_t &touch) {
@@ -336,7 +348,7 @@ namespace platf {
       .y = touch.y,
       .pressure = touch.pressure,
     };
-    _impl->async_pipe->send(hidmaestro::encode_touch(t));
+    _impl->send_locked(hidmaestro::encode_touch(t));
   }
 
   void hidmaestro_t::motion(const gamepad_motion_t &motion) {
@@ -350,7 +362,7 @@ namespace platf {
       .y = motion.y,
       .z = motion.z,
     };
-    _impl->async_pipe->send(hidmaestro::encode_motion(m));
+    _impl->send_locked(hidmaestro::encode_motion(m));
   }
 
   void hidmaestro_t::battery(const gamepad_battery_t &battery) {
@@ -362,7 +374,7 @@ namespace platf {
       .state = battery.state,
       .percentage = battery.percentage,
     };
-    _impl->async_pipe->send(hidmaestro::encode_battery(b));
+    _impl->send_locked(hidmaestro::encode_battery(b));
   }
 
 }  // namespace platf
