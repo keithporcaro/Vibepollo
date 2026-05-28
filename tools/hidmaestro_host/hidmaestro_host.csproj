@@ -18,10 +18,16 @@
 
   <!--
     HIDMaestro.Core is not published to NuGet. Drop HIDMaestro.Core.dll into
-    ./external/ before building (the CMake integration will fetch it from the
-    GitHub release once the host-side wiring lands). The reference is wired
-    here so the build fails loudly if the dependency isn't staged.
+    ./external/ before building. When the DLL is present we wire the
+    reference AND define HIDMAESTRO_CORE so the ControllerManager compiles
+    against the real types. When absent, the sidecar still builds (frames
+    are decoded and logged); the host's `is_hidmaestro_available()` check
+    is not enough on its own — the user will see no controllers appear
+    until the DLL ships next to the exe.
   -->
+  <PropertyGroup Condition="Exists('external\HIDMaestro.Core.dll')">
+    <DefineConstants>$(DefineConstants);HIDMAESTRO_CORE</DefineConstants>
+  </PropertyGroup>
   <ItemGroup Condition="Exists('external\HIDMaestro.Core.dll')">
     <Reference Include="HIDMaestro.Core">
       <HintPath>external\HIDMaestro.Core.dll</HintPath>

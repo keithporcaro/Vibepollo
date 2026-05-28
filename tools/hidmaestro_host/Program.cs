@@ -78,11 +78,30 @@ internal static class Program
 
         Console.Error.WriteLine("[hidmaestro-host] host connected");
 
+        // ControllerManager owns the HMContext and dispatches state mutations.
+        // Pipe sends are serialized through a single SemaphoreSlim so callbacks
+        // from HIDMaestro's polling thread don't interleave with main-loop sends.
+        var writeLock = new SemaphoreSlim(1, 1);
+        async Task SendFrameSerialized(byte[] payload)
+        {
+            await writeLock.WaitAsync(ct);
+            try
+            {
+                await SendFrameAsync(server, payload, ct);
+            }
+            finally
+            {
+                writeLock.Release();
+            }
+        }
+
+        using var manager = new ControllerManager(SendFrameSerialized);
+
         // Send our HELLO unprompted; the host will send theirs in response.
-        await SendFrameAsync(server, WireEncode.EncodeHello(new HelloFrame(
+        await SendFrameSerialized(WireEncode.EncodeHello(new HelloFrame(
             ProtocolVersion: Protocol.Version,
             SupportedOpcodeMask: SupportedOpcodeMask(),
-            SupportedProfiles: SupportedProfiles())), ct);
+            SupportedProfiles: manager.SupportedProfiles)));
 
         try
         {
@@ -90,7 +109,7 @@ internal static class Program
             {
                 var frame = await ReadFrameAsync(server, ct);
                 if (frame is null) break;
-                Dispatch(frame);
+                Dispatch(frame, manager);
             }
         }
         catch (IOException ex)
@@ -104,19 +123,31 @@ internal static class Program
 
     private static Task<int> RunSelfTestAsync(CancellationToken ct)
     {
-        // Will allocate + free one HIDMaestro controller via HMContext once the
-        // ControllerManager class lands. For now we just confirm the wire-format
-        // code can encode/decode its own frames.
+        // Roundtrip a HELLO through the codec, then ALLOC + FREE one controller
+        // through the manager. With HIDMaestro.Core linked this exercises the
+        // driver path; without it the manager logs a no-op and we still verify
+        // the dispatch table.
         var hello = WireEncode.EncodeHello(new HelloFrame(
             ProtocolVersion: Protocol.Version,
             SupportedOpcodeMask: SupportedOpcodeMask(),
-            SupportedProfiles: SupportedProfiles()));
+            SupportedProfiles: Array.Empty<string>()));
         var (op, ver) = WireDecode.PeekHeader(hello);
         if (op != Opcode.Hello || ver != Protocol.Version)
         {
             Console.Error.WriteLine($"[hidmaestro-host] selftest failed: roundtrip mismatch ({op} v{ver})");
             return Task.FromResult(1);
         }
+
+        using var manager = new ControllerManager(_ => Task.CompletedTask);
+        manager.Alloc(new AllocFrame(
+            PadIndex: 0,
+            ClientRelativeIndex: 0,
+            Profile: "xbox-360-wired",
+            ClientType: LiCType.Xbox,
+            Capabilities: 0,
+            SupportedButtons: 0));
+        manager.Free(0);
+
         Console.WriteLine("[hidmaestro-host] selftest ok");
         return Task.FromResult(0);
     }
@@ -135,13 +166,7 @@ internal static class Program
              | Protocol.OpcodeBit(Opcode.TriggerEffect);
     }
 
-    private static IReadOnlyList<string> SupportedProfiles()
-    {
-        // Populated from HMContext.AllProfiles once HIDMaestro.Core is wired in.
-        return Array.Empty<string>();
-    }
-
-    private static void Dispatch(byte[] frame)
+    private static void Dispatch(byte[] frame, ControllerManager manager)
     {
         var (op, _) = WireDecode.PeekHeader(frame);
         switch (op)
@@ -151,18 +176,22 @@ internal static class Program
                 Console.Error.WriteLine($"[hidmaestro-host] host hello v{h.ProtocolVersion} mask=0x{h.SupportedOpcodeMask:X}");
                 break;
             case Opcode.Alloc:
-                var a = WireDecode.DecodeAlloc(frame);
-                Console.Error.WriteLine($"[hidmaestro-host] alloc pad={a.PadIndex} profile={a.Profile}");
+                manager.Alloc(WireDecode.DecodeAlloc(frame));
                 break;
             case Opcode.Free:
-                var idx = WireDecode.DecodeFree(frame);
-                Console.Error.WriteLine($"[hidmaestro-host] free pad={idx}");
+                manager.Free(WireDecode.DecodeFree(frame));
                 break;
             case Opcode.State:
+                manager.State(WireDecode.DecodeState(frame));
+                break;
             case Opcode.Touch:
+                manager.Touch(WireDecode.DecodeTouch(frame));
+                break;
             case Opcode.Motion:
+                manager.Motion(WireDecode.DecodeMotion(frame));
+                break;
             case Opcode.Battery:
-                // Wire-up to ControllerManager lands in a follow-up commit.
+                manager.Battery(WireDecode.DecodeBattery(frame));
                 break;
             default:
                 Console.Error.WriteLine($"[hidmaestro-host] unknown opcode {op}");
