@@ -393,6 +393,38 @@ namespace input {
       << "--end controller battery packet--"sv;
   }
 
+  /**
+   * @brief Prints a Steam Controller extended state packet.
+   * @param packet The Steam Controller extended state packet.
+   */
+  void print(PSS_CONTROLLER_SC_EXTENDED_PACKET packet) {
+    BOOST_LOG(verbose)
+      << "--begin controller sc extended packet--"sv << std::endl
+      << "controllerNumber ["sv << (uint32_t) packet->controllerNumber << ']' << std::endl
+      << "extensionVersion ["sv << (uint32_t) packet->extensionVersion << ']' << std::endl
+      << "scExtButtonFlags ["sv << util::hex(util::endian::little(packet->scExtButtonFlags)).to_string_view() << ']' << std::endl
+      << "gripCapLeft ["sv << util::endian::little(packet->gripCapLeft) << ']' << std::endl
+      << "gripCapRight ["sv << util::endian::little(packet->gripCapRight) << ']' << std::endl
+      << "--end controller sc extended packet--"sv;
+  }
+
+  /**
+   * @brief Prints a Steam Controller trackpad packet.
+   * @param packet The Steam Controller trackpad packet.
+   */
+  void print(PSS_CONTROLLER_SC_TRACKPAD_PACKET packet) {
+    BOOST_LOG(verbose)
+      << "--begin controller sc trackpad packet--"sv << std::endl
+      << "controllerNumber ["sv << (uint32_t) packet->controllerNumber << ']' << std::endl
+      << "padIndex ["sv << (uint32_t) packet->padIndex << ']' << std::endl
+      << "eventType ["sv << util::hex(packet->eventType).to_string_view() << ']' << std::endl
+      << "pressedFlags ["sv << util::hex(packet->pressedFlags).to_string_view() << ']' << std::endl
+      << "x ["sv << from_netfloat(packet->x) << ']' << std::endl
+      << "y ["sv << from_netfloat(packet->y) << ']' << std::endl
+      << "pressure ["sv << from_netfloat(packet->pressure) << ']' << std::endl
+      << "--end controller sc trackpad packet--"sv;
+  }
+
   void print(void *payload) {
     auto header = (PNV_INPUT_HEADER) payload;
 
@@ -440,6 +472,12 @@ namespace input {
         break;
       case SS_CONTROLLER_BATTERY_MAGIC:
         print((PSS_CONTROLLER_BATTERY_PACKET) payload);
+        break;
+      case SS_CONTROLLER_SC_EXTENDED_MAGIC:
+        print((PSS_CONTROLLER_SC_EXTENDED_PACKET) payload);
+        break;
+      case SS_CONTROLLER_SC_TRACKPAD_MAGIC:
+        print((PSS_CONTROLLER_SC_TRACKPAD_PACKET) payload);
         break;
     }
   }
@@ -1081,6 +1119,73 @@ namespace input {
     platf::gamepad_battery(platf_input, battery);
   }
 
+  /**
+   * @brief Called to pass a Steam Controller extended state message to the platform backend.
+   * @param input The input context pointer.
+   * @param packet The Steam Controller extended state packet.
+   */
+  void passthrough(std::shared_ptr<input_t> &input, PSS_CONTROLLER_SC_EXTENDED_PACKET packet) {
+    if (!config::input.controller) {
+      return;
+    }
+
+    if (packet->controllerNumber < 0 || packet->controllerNumber >= input->gamepads.size()) {
+      BOOST_LOG(warning) << "ControllerNumber out of range ["sv << packet->controllerNumber << ']';
+      return;
+    }
+
+    auto &gamepad = input->gamepads[packet->controllerNumber];
+    if (gamepad.id < 0) {
+      BOOST_LOG(warning) << "ControllerNumber ["sv << packet->controllerNumber << "] not allocated"sv;
+      return;
+    }
+
+    platf::gamepad_sc_extended_t state {
+      {gamepad.id, packet->controllerNumber},
+      packet->extensionVersion,
+      util::endian::little(packet->scExtButtonFlags),
+      util::endian::little(packet->gripCapLeft),
+      util::endian::little(packet->gripCapRight),
+      packet->flags,
+    };
+
+    platf::gamepad_update_ex(platf_input, state);
+  }
+
+  /**
+   * @brief Called to pass a Steam Controller trackpad message to the platform backend.
+   * @param input The input context pointer.
+   * @param packet The Steam Controller trackpad packet.
+   */
+  void passthrough(std::shared_ptr<input_t> &input, PSS_CONTROLLER_SC_TRACKPAD_PACKET packet) {
+    if (!config::input.controller) {
+      return;
+    }
+
+    if (packet->controllerNumber < 0 || packet->controllerNumber >= input->gamepads.size()) {
+      BOOST_LOG(warning) << "ControllerNumber out of range ["sv << packet->controllerNumber << ']';
+      return;
+    }
+
+    auto &gamepad = input->gamepads[packet->controllerNumber];
+    if (gamepad.id < 0) {
+      BOOST_LOG(warning) << "ControllerNumber ["sv << packet->controllerNumber << "] not allocated"sv;
+      return;
+    }
+
+    platf::gamepad_sc_trackpad_t touch {
+      {gamepad.id, packet->controllerNumber},
+      packet->padIndex,
+      packet->eventType,
+      packet->pressedFlags,
+      from_clamped_netfloat(packet->x, 0.0f, 1.0f),
+      from_clamped_netfloat(packet->y, 0.0f, 1.0f),
+      from_clamped_netfloat(packet->pressure, 0.0f, 1.0f),
+    };
+
+    platf::gamepad_trackpad(platf_input, touch);
+  }
+
   void passthrough(std::shared_ptr<input_t> &input, PNV_MULTI_CONTROLLER_PACKET packet) {
     if (!config::input.controller) {
       return;
@@ -1572,6 +1677,12 @@ namespace input {
       case SS_CONTROLLER_BATTERY_MAGIC:
         passthrough(input, (PSS_CONTROLLER_BATTERY_PACKET) payload);
         break;
+      case SS_CONTROLLER_SC_EXTENDED_MAGIC:
+        passthrough(input, (PSS_CONTROLLER_SC_EXTENDED_PACKET) payload);
+        break;
+      case SS_CONTROLLER_SC_TRACKPAD_MAGIC:
+        passthrough(input, (PSS_CONTROLLER_SC_TRACKPAD_PACKET) payload);
+        break;
     }
 
     bool schedule_next = false;
@@ -1612,6 +1723,8 @@ namespace input {
         case SS_CONTROLLER_TOUCH_MAGIC:
         case SS_CONTROLLER_MOTION_MAGIC:
         case SS_CONTROLLER_BATTERY_MAGIC:
+        case SS_CONTROLLER_SC_EXTENDED_MAGIC:
+        case SS_CONTROLLER_SC_TRACKPAD_MAGIC:
           if (!(permission & crypto::PERM::input_controller)) {
             return;
           } else {
