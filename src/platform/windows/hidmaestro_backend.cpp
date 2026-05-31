@@ -54,14 +54,29 @@ namespace platf {
     }
 
     // Map config + client metadata to a HIDMaestro profile id. Mirrors the
-    // X360-vs-DS4 selection logic in vigem_t::alloc; SC profile selection slots
-    // in when the catalog gains a 2026 Steam Controller entry.
+    // X360-vs-DS4 selection logic in vigem_t::alloc and adds two Valve-VID
+    // outputs the sidecar can produce:
+    //   * "steam-deck"            — bundled HIDMaestro profile (PID 0x1205,
+    //                                full HID gamepad shape with paddles + IMU)
+    //   * "steam-controller-2026" — transitional profile synthesized by the
+    //                                sidecar from steam-deck with the published
+    //                                SC2026 identity (VID 0x28DE / PID 0x1302).
+    //                                Trackpads, grip sensors, and linear-actuator
+    //                                haptics are not yet exposed by that
+    //                                descriptor; sticks / triggers / dpad / 4
+    //                                paddles / IMU work today.
     std::string select_profile(const gamepad_arrival_t &metadata) {
       if (config::input.gamepad == "x360"sv) {
         return "xbox-360-wired";
       }
       if (config::input.gamepad == "ds4"sv) {
         return "dualshock-4-v1-full";
+      }
+      if (config::input.gamepad == "steam-deck"sv) {
+        return "steam-deck";
+      }
+      if (config::input.gamepad == "steam-controller-2026"sv) {
+        return "steam-controller-2026";
       }
       if (metadata.type == LI_CTYPE_PS) {
         return "dualshock-4-v1-full";

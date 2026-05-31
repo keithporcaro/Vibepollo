@@ -96,7 +96,16 @@ internal sealed class ControllerManager : IDisposable
         get
         {
 #if HIDMAESTRO_CORE
-            return _ctx?.AllProfiles.Select(p => p.Id).ToArray() ?? Array.Empty<string>();
+            if (_ctx is null) return Array.Empty<string>();
+            var ids = _ctx.AllProfiles.Select(p => p.Id).ToList();
+            // Advertise transitional synthesized profiles that ResolveProfile
+            // can build on demand even though they aren't bundled in the
+            // catalog JSON yet.
+            if (_ctx.GetProfile("steam-deck") is not null && !ids.Contains(SteamController2026Id))
+            {
+                ids.Add(SteamController2026Id);
+            }
+            return ids;
 #else
             return Array.Empty<string>();
 #endif
@@ -121,7 +130,7 @@ internal sealed class ControllerManager : IDisposable
 #if HIDMAESTRO_CORE
             try
             {
-                var profile = _ctx?.GetProfile(frame.Profile);
+                var profile = ResolveProfile(frame.Profile);
                 if (profile is null)
                 {
                     Console.Error.WriteLine($"[hidmaestro-host] unknown HIDMaestro profile '{frame.Profile}'");
@@ -142,6 +151,77 @@ internal sealed class ControllerManager : IDisposable
             _pads[frame.PadIndex] = pad;
         }
     }
+
+#if HIDMAESTRO_CORE
+    // Profile names we accept as inputs from the host and synthesize on the fly
+    // when the upstream HIDMaestro catalog hasn't published a matching JSON yet.
+    private const string SteamController2026Id = "steam-controller-2026";
+
+    // Resolve a profile id from the catalog, transparently synthesizing
+    // transitional profiles when upstream HIDMaestro hasn't shipped one yet.
+    //
+    // For "steam-controller-2026" we clone the bundled Steam Deck profile and
+    // overwrite the identity to Valve's published VID/PID for the 2026 Steam
+    // Controller (0x28DE / 0x1302). What you get is a system-visible HID
+    // device that Windows / Steam / SDL3 see as a 2026 Steam Controller, with
+    // a working Steam-Deck-shape report: 2 sticks, 2 analog triggers, dpad,
+    // 4 face buttons, 2 bumpers, 4 paddles, accel + gyro. Trackpads, grip
+    // sensors, and linear-actuator haptics are NOT exposed by this descriptor;
+    // they degrade to no-op until either upstream HIDMaestro ships an SC2026
+    // JSON or we adopt the public vendor-blob descriptor (54-byte report 0x42
+    // on usage page 0xFF00) via SubmitRawReport(). Tracking notes inline.
+    private HMProfile? ResolveProfile(string id)
+    {
+        if (_ctx is null) return null;
+        var direct = _ctx.GetProfile(id);
+        if (direct is not null) return direct;
+
+        if (id == SteamController2026Id)
+        {
+            return BuildSteamController2026Profile();
+        }
+        return null;
+    }
+
+    private HMProfile? _cachedSc2026;
+
+    private HMProfile? BuildSteamController2026Profile()
+    {
+        if (_cachedSc2026 is not null) return _cachedSc2026;
+        if (_ctx is null) return null;
+
+        var baseProfile = _ctx.GetProfile("steam-deck");
+        if (baseProfile is null)
+        {
+            Console.Error.WriteLine("[hidmaestro-host] cannot synthesize steam-controller-2026: base 'steam-deck' profile missing from catalog");
+            return null;
+        }
+
+        try
+        {
+            // Clone Steam Deck shape, swap identity to Valve's published 2026
+            // Steam Controller VID/PID (0x28DE / 0x1302). Internal codename
+            // observed in PadForge sources: "Triton".
+            _cachedSc2026 = new HMProfileBuilder()
+                .FromProfile(baseProfile)
+                .Id(SteamController2026Id)
+                .Name("Steam Controller (2026)")
+                .Vendor("Valve")
+                .Vid(0x28DE)
+                .Pid(0x1302)
+                .ProductString("Steam Controller")
+                .ManufacturerString("Valve Software")
+                .Build();
+            Console.Error.WriteLine("[hidmaestro-host] synthesized transitional steam-controller-2026 profile from steam-deck base");
+            return _cachedSc2026;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[hidmaestro-host] failed to synthesize steam-controller-2026: {ex.Message}");
+            return null;
+        }
+    }
+#endif
 
     public void Free(ushort padIndex)
     {

@@ -1815,10 +1815,16 @@ namespace platf {
 
   std::vector<supported_gamepad_t> &supported_gamepads(input_t *input) {
     if (!input) {
+      // The HIDMaestro-only entries are listed here so config validation
+      // accepts them when the user opts in via the gamepad= string. With
+      // the ViGEm backend selected they fall through to capability-based
+      // default selection (Xbox 360 / DS4) — no error.
       static std::vector gps {
         supported_gamepad_t {"auto", true, ""},
         supported_gamepad_t {"x360", false, ""},
         supported_gamepad_t {"ds4", false, ""},
+        supported_gamepad_t {"steam-deck", false, ""},
+        supported_gamepad_t {"steam-controller-2026", false, ""},
       };
 
       return gps;
@@ -1832,7 +1838,9 @@ namespace platf {
     static std::vector gps {
       supported_gamepad_t {"auto", true, reason},
       supported_gamepad_t {"x360", enabled, reason},
-      supported_gamepad_t {"ds4", enabled, reason}
+      supported_gamepad_t {"ds4", enabled, reason},
+      supported_gamepad_t {"steam-deck", enabled, reason},
+      supported_gamepad_t {"steam-controller-2026", enabled, reason},
     };
 
     for (auto &[name, is_enabled, reason_disabled] : gps) {
